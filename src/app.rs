@@ -18,7 +18,7 @@ use ratatui::{
 use crate::cell::{self, Formatted};
 use crate::clipboard;
 use crate::editor::{self, EditRequest};
-use crate::table::{Matcher, Table, slice_cols};
+use crate::table::{Matcher, Table, is_border_line, slice_cols};
 use unicode_width::UnicodeWidthStr;
 
 /// How many terminal columns H / L scroll the view.
@@ -186,7 +186,16 @@ impl App {
         let mut lines: Vec<Line> = header
             .iter()
             .take(height)
-            .map(|l| self.render_line(l, header_style, &[]))
+            .map(|l| {
+                // Like pgcli: only the column names are green; the `|`
+                // separators and border lines (`+----+`) keep the default colour.
+                let names: Vec<_> = if is_border_line(l) {
+                    Vec::new()
+                } else {
+                    self.table.columns.iter().map(|r| (r.clone(), header_style)).collect()
+                };
+                self.render_line(l, Style::new(), &names)
+            })
             .collect();
 
         let match_style = Style::new().bg(Color::LightYellow).fg(Color::Black);
