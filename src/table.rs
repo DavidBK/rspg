@@ -90,6 +90,17 @@ impl Table {
         }
         Some(cell_text(line, self.columns.get(col)?))
     }
+
+    /// A whole data row as tab-separated cell values (pastes into
+    /// spreadsheet columns). Plain text: the trimmed line.
+    pub fn row(&self, row: usize) -> Option<String> {
+        let line = self.lines.get(self.header_rows + row)?;
+        if self.columns.is_empty() {
+            return Some(line.trim().to_string());
+        }
+        let cells: Vec<String> = self.columns.iter().map(|r| cell_text(line, r)).collect();
+        Some(cells.join("\t"))
+    }
 }
 
 fn cell_text(line: &str, cols: &Range<usize>) -> String {
@@ -220,6 +231,7 @@ mod tests {
         assert_eq!(t.column_names, vec!["id", "name"]);
         assert_eq!(t.data_rows(), 2);
         assert_eq!(t.cell(1, 1).as_deref(), Some("bob"));
+        assert_eq!(t.row(1).as_deref(), Some("2\tbob"));
     }
 
     #[test]

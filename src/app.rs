@@ -187,7 +187,7 @@ impl App {
         if let Some(msg) = &self.message {
             return format!(" {msg}");
         }
-        let help = "hjkl:move  HL:scroll  x:cell  e/E:vim  y:copy  q:quit";
+        let help = "hjkl:move  HL:scroll  x:cell  e/E:vim  y/Y:copy  q:quit";
         let rows = self.table.data_rows();
         if self.cell_mode() {
             let name = self.table.column_names.get(self.col).map_or("", String::as_str);
@@ -281,6 +281,7 @@ impl App {
 
     fn table_key(&mut self, key: KeyEvent) {
         let page = self.view.page_height.max(1) as isize;
+        let half = (page / 2).max(1);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let step = VIEW_STEP as isize;
@@ -299,12 +300,14 @@ impl App {
             KeyCode::Char('L') => self.scroll_view(0, step),
 
             // Cursor.
-            KeyCode::Down | KeyCode::Char('j') => self.move_row(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_row(-1),
+            KeyCode::Char('d') if ctrl => self.move_page(half),
+            KeyCode::Char('u') if ctrl => self.move_page(-half),
+            KeyCode::Down | KeyCode::Char('j' | 'w') => self.move_row(1),
+            KeyCode::Up | KeyCode::Char('k' | 'b') => self.move_row(-1),
             KeyCode::Right | KeyCode::Char('l') => self.move_col(1),
             KeyCode::Left | KeyCode::Char('h') => self.move_col(-1),
             KeyCode::PageDown | KeyCode::Char(' ') => self.move_page(page),
-            KeyCode::PageUp | KeyCode::Char('b') => self.move_page(-page),
+            KeyCode::PageUp => self.move_page(-page),
             KeyCode::Home | KeyCode::Char('g') => {
                 self.row = 0;
                 self.top = 0;
@@ -321,7 +324,15 @@ impl App {
             // Actions on the current cell.
             KeyCode::Char('y') => {
                 if let Some(value) = self.table.cell(self.row, self.col) {
-                    self.copy(&value);
+                    let label = format!("cell: {value}");
+                    self.copy(&value, &label);
+                }
+            }
+            KeyCode::Char('Y') => {
+                if let Some(row) = self.table.row(self.row) {
+                    let cells = self.table.columns.len().max(1);
+                    let label = format!("row {} ({cells} cells)", self.row + 1);
+                    self.copy(&row, &label);
                 }
             }
             KeyCode::Char('x') | KeyCode::Enter => self.open_popup(),
@@ -344,6 +355,8 @@ impl App {
         // `let ... else` again: we know we're in Detail mode, get the popup.
         let Mode::Detail(popup) = &mut self.mode else { return };
         let page = popup.page_height.max(1) as isize;
+        let half = (page / 2).max(1);
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let max_scroll = popup.line_count.saturating_sub(popup.page_height);
         let mut scroll_by = |n: isize| {
             popup.scroll = popup.scroll.checked_add_signed(n).unwrap_or(0).min(max_scroll);
@@ -351,17 +364,19 @@ impl App {
 
         match key.code {
             KeyCode::Char('q' | 'x') | KeyCode::Esc | KeyCode::Enter => self.mode = Mode::Table,
-            KeyCode::Down | KeyCode::Char('j') => scroll_by(1),
-            KeyCode::Up | KeyCode::Char('k') => scroll_by(-1),
+            KeyCode::Char('d') if ctrl => scroll_by(half),
+            KeyCode::Char('u') if ctrl => scroll_by(-half),
+            KeyCode::Down | KeyCode::Char('j' | 'w') => scroll_by(1),
+            KeyCode::Up | KeyCode::Char('k' | 'b') => scroll_by(-1),
             KeyCode::PageDown | KeyCode::Char(' ') => scroll_by(page),
-            KeyCode::PageUp | KeyCode::Char('b') => scroll_by(-page),
+            KeyCode::PageUp => scroll_by(-page),
             KeyCode::Home | KeyCode::Char('g') => popup.scroll = 0,
             KeyCode::End | KeyCode::Char('G') => popup.scroll = max_scroll,
             KeyCode::Char('y') => {
                 // Clone first: `self.copy` needs all of `self`, so the
                 // borrow of `popup` (part of `self`) must end before it.
                 let text = popup.content.text.clone();
-                self.copy(&text);
+                self.copy(&text, "formatted cell");
             }
             KeyCode::Char('e') => {
                 let (text, is_json) = (popup.content.text.clone(), popup.content.is_json);
@@ -413,9 +428,10 @@ impl App {
         });
     }
 
-    fn copy(&mut self, text: &str) {
+    /// Copy `text`; `label` describes it in the status bar.
+    fn copy(&mut self, text: &str, label: &str) {
         self.message = Some(match clipboard::copy(text) {
-            Ok(()) => format!("copied: {}", text.lines().next().unwrap_or("")),
+            Ok(()) => format!("copied {label}"),
             Err(e) => format!("copy failed: {e}"),
         });
     }
