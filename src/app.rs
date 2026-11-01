@@ -18,7 +18,7 @@ use ratatui::{
 use crate::cell::{self, Formatted};
 use crate::clipboard;
 use crate::editor::{self, EditRequest};
-use crate::table::{Table, slice_cols};
+use crate::table::{Matcher, Table, slice_cols};
 use unicode_width::UnicodeWidthStr;
 
 /// How many terminal columns H / L scroll the view.
@@ -94,6 +94,8 @@ pub struct App {
     /// the main loop has).
     pending_edit: Option<EditRequest>,
     last_search: Option<Search>,
+    /// Highlight matches of `last_search` (vim's hlsearch); Esc turns it off.
+    highlight: bool,
     flash: Option<Flash>,
     quit: bool,
 }
@@ -112,6 +114,7 @@ impl App {
             message: None,
             pending_edit: None,
             last_search: None,
+            highlight: false,
             flash: None,
             quit: false,
         }
@@ -181,30 +184,42 @@ impl App {
         let mut lines: Vec<Line> = header
             .iter()
             .take(height)
-            .map(|l| self.render_line(l, header_style, None))
+            .map(|l| self.render_line(l, header_style, &[]))
             .collect();
 
+        let match_style = Style::new().bg(Color::LightYellow).fg(Color::Black);
+        let flash_style = Style::new().bg(Color::Green).fg(Color::Black);
+        let cursor_style = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        let row_style = Style::new().bg(Color::Indexed(237));
+        let matcher = self.active_matcher();
+
         for (i, line) in rest.iter().enumerate().skip(self.top).take(self.view.page_height) {
-            let flash = self.flash.as_ref().filter(|f| f.row == i);
-            let flash_style = Style::new().bg(Color::Yellow).fg(Color::Black);
-            let cursor_style = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+            let is_data = i < self.table.data_rows();
             let cell = |col: usize| self.table.columns.get(col).cloned();
 
-            let (style, cursor) = match flash {
+            // Highlights in paint order: later ones win where they overlap.
+            let mut highlights: Vec<(Range<usize>, Style)> = Vec::new();
+            if is_data && let Some(m) = &matcher {
+                let ranges = self.table.match_ranges(line, m);
+                highlights.extend(ranges.into_iter().map(|r| (r, match_style)));
+            }
+
+            let flash = self.flash.as_ref().filter(|f| f.row == i);
+            let style = match flash {
                 // `Y`: the whole row lights up.
-                Some(Flash { col: None, .. }) => (flash_style, None),
+                Some(Flash { col: None, .. }) => flash_style,
                 // `y`: just the copied cell.
-                Some(Flash { col: Some(c), .. }) => (
-                    Style::new().bg(Color::Indexed(237)),
-                    cell(*c).map(|r| (r, flash_style)),
-                ),
-                None if i == self.row && self.table.data_rows() > 0 => (
-                    Style::new().bg(Color::Indexed(237)),
-                    cell(self.col).map(|r| (r, cursor_style)),
-                ),
-                None => (Style::new(), None),
+                Some(Flash { col: Some(c), .. }) => {
+                    highlights.extend(cell(*c).map(|r| (r, flash_style)));
+                    row_style
+                }
+                None if i == self.row && is_data => {
+                    highlights.extend(cell(self.col).map(|r| (r, cursor_style)));
+                    row_style
+                }
+                None => Style::new(),
             };
-            lines.push(self.render_line(line, style, cursor));
+            lines.push(self.render_line(line, style, &highlights));
         }
 
         frame.render_widget(Paragraph::new(lines), body);
@@ -225,21 +240,31 @@ impl App {
 
     }
 
-    /// Build one screen line: [frozen part][scrolled part], with one cell
-    /// range (the cursor, or a copy flash) drawn in its own style.
+    /// Build one screen line: [frozen part][scrolled part], with the
+    /// `highlights` (matches, cursor, flash) drawn in their own styles.
     fn render_line(
         &self,
         line: &str,
         style: Style,
-        cursor: Option<(Range<usize>, Style)>,
+        highlights: &[(Range<usize>, Style)],
     ) -> Line<'static> {
         let View { frozen, scroll_width, .. } = self.view;
         let mut spans = Vec::new();
         let frozen_style = style.add_modifier(Modifier::BOLD);
-        push_segment(&mut spans, line, 0..frozen, frozen_style, cursor.clone());
+        push_segment(&mut spans, line, 0..frozen, frozen_style, highlights);
         let from = frozen + self.left;
-        push_segment(&mut spans, line, from..from + scroll_width, style, cursor);
+        push_segment(&mut spans, line, from..from + scroll_width, style, highlights);
         Line::from(spans)
+    }
+
+    /// What to highlight: the query being typed (incsearch), otherwise the
+    /// last search while highlighting is on.
+    fn active_matcher(&self) -> Option<Matcher> {
+        match &self.mode {
+            Mode::Search(s) if !s.query.is_empty() => Matcher::new(&s.query),
+            _ if self.highlight => Matcher::new(&self.last_search.as_ref()?.query),
+            _ => None,
+        }
     }
 
     fn status_text(&self) -> String {
@@ -384,6 +409,7 @@ impl App {
             return;
         };
         let forward = forward != reverse; // `!=` on bools is XOR
+        self.highlight = true;
         match self.table.find(self.row, self.col, &query, forward) {
             Some(hit) => {
                 self.row = hit.row;
@@ -421,7 +447,10 @@ impl App {
         // Arms are tried top to bottom, so the Ctrl/Shift variants must come
         // before the plain keys they share a KeyCode with.
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('q') => self.quit = true,
+            // Esc first clears search highlights, then quits.
+            KeyCode::Esc if self.highlight => self.highlight = false,
+            KeyCode::Esc => self.quit = true,
 
             // View only.
             KeyCode::Char('e') if ctrl => self.scroll_view(1, 0),
@@ -634,38 +663,37 @@ fn draw_popup(frame: &mut Frame, popup: &mut Popup) {
     }
 }
 
-/// Append the screen columns `range` of `line` as spans, drawing the part
-/// that overlaps `cursor` in the cursor's style.
+/// Append the screen columns `range` of `line` as spans.
+///
+/// Every column starts in `style`; each highlight then paints its own style
+/// over the columns it covers (later highlights win). Finally, neighbouring
+/// columns with the same style are joined into one span.
 fn push_segment(
     spans: &mut Vec<Span<'static>>,
     line: &str,
     range: Range<usize>,
     style: Style,
-    cursor: Option<(Range<usize>, Style)>,
+    highlights: &[(Range<usize>, Style)],
 ) {
     if range.is_empty() {
         return;
     }
-    // Intersect the cursor cell with this segment.
-    let (hl, cursor_style) = match cursor {
-        Some((c, s)) => (Some(c.start.max(range.start)..c.end.min(range.end)), s),
-        None => (None, style),
-    };
-    let hl = hl.filter(|c| !c.is_empty());
+    // `vec![x; n]` = n copies of x (Style is Copy, so that's cheap).
+    let mut styles = vec![style; range.len()];
+    for (r, s) in highlights {
+        // Clip the highlight to this segment (empty range = no-op loop).
+        for col in r.start.max(range.start)..r.end.min(range.end) {
+            styles[col - range.start] = *s;
+        }
+    }
 
-    match hl {
-        None => spans.push(Span::styled(slice_cols(line, range.start, range.len()), style)),
-        Some(hl) => {
-            let parts = [
-                (range.start..hl.start, style),
-                (hl.clone(), cursor_style),
-                (hl.end..range.end, style),
-            ];
-            for (r, s) in parts {
-                if !r.is_empty() {
-                    spans.push(Span::styled(slice_cols(line, r.start, r.len()), s));
-                }
-            }
+    // Emit one span per run of equal styles.
+    let mut run = 0;
+    for i in 1..=styles.len() {
+        if i == styles.len() || styles[i] != styles[run] {
+            let text = slice_cols(line, range.start + run, i - run);
+            spans.push(Span::styled(text, styles[run]));
+            run = i;
         }
     }
 }
