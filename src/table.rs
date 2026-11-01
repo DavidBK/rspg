@@ -235,7 +235,7 @@ fn is_box_char(c: char) -> bool {
 }
 
 /// A line made only of border characters, mostly horizontal ones.
-fn is_border_line(line: &str) -> bool {
+pub fn is_border_line(line: &str) -> bool {
     let line = line.trim_end();
     let mut total = 0;
     let mut horizontal = 0;

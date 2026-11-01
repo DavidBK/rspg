@@ -18,7 +18,7 @@ use ratatui::{
 use crate::cell::{self, Formatted};
 use crate::clipboard;
 use crate::editor::{self, EditRequest};
-use crate::table::{Matcher, Table, slice_cols};
+use crate::table::{Matcher, Table, is_border_line, slice_cols};
 use unicode_width::UnicodeWidthStr;
 
 /// How many terminal columns H / L scroll the view.
@@ -180,11 +180,17 @@ impl App {
         // `split_at` gives two borrowed slices of the same Vec — no copying.
         let (header, rest) = self.table.lines.split_at(self.table.header_rows);
 
-        let header_style = Style::new().add_modifier(Modifier::BOLD);
+        // pgcli's default `output.header = "#00ff5f bold"`; #00ff5f is
+        // exactly xterm-256 colour 47, which works without truecolor too.
+        let header_style = Style::new().fg(Color::Indexed(47)).add_modifier(Modifier::BOLD);
         let mut lines: Vec<Line> = header
             .iter()
             .take(height)
-            .map(|l| self.render_line(l, header_style, &[]))
+            .map(|l| {
+                // Column names in green; border lines (`+----+`) stay plain.
+                let style = if is_border_line(l) { Style::new() } else { header_style };
+                self.render_line(l, style, &[])
+            })
             .collect();
 
         let match_style = Style::new().bg(Color::LightYellow).fg(Color::Black);
