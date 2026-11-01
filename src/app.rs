@@ -463,10 +463,11 @@ impl App {
             // Cursor.
             KeyCode::Char('d') if ctrl => self.move_page(half),
             KeyCode::Char('u') if ctrl => self.move_page(-half),
-            KeyCode::Down | KeyCode::Char('j' | 'w') => self.move_row(1),
-            KeyCode::Up | KeyCode::Char('k' | 'b') => self.move_row(-1),
-            KeyCode::Right | KeyCode::Char('l') => self.move_col(1),
-            KeyCode::Left | KeyCode::Char('h') => self.move_col(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_row(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_row(-1),
+            // w / b: next / previous cell, like vim's word motions.
+            KeyCode::Right | KeyCode::Char('l' | 'w') => self.move_col(1),
+            KeyCode::Left | KeyCode::Char('h' | 'b') => self.move_col(-1),
             KeyCode::PageDown | KeyCode::Char(' ') => self.move_page(page),
             KeyCode::PageUp => self.move_page(-page),
             KeyCode::Home | KeyCode::Char('g') => {
@@ -543,8 +544,8 @@ impl App {
             KeyCode::Char('q' | 'x') | KeyCode::Esc | KeyCode::Enter => self.mode = Mode::Table,
             KeyCode::Char('d') if ctrl => scroll_by(half),
             KeyCode::Char('u') if ctrl => scroll_by(-half),
-            KeyCode::Down | KeyCode::Char('j' | 'w') => scroll_by(1),
-            KeyCode::Up | KeyCode::Char('k' | 'b') => scroll_by(-1),
+            KeyCode::Down | KeyCode::Char('j') => scroll_by(1),
+            KeyCode::Up | KeyCode::Char('k') => scroll_by(-1),
             KeyCode::PageDown | KeyCode::Char(' ') => scroll_by(page),
             KeyCode::PageUp => scroll_by(-page),
             KeyCode::Home | KeyCode::Char('g') => popup.scroll = 0,
