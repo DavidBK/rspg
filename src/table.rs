@@ -34,6 +34,14 @@ pub struct Table {
     pub max_width: usize,
 }
 
+/// A search result: cursor position, and whether we went past the end.
+#[derive(Debug, PartialEq)]
+pub struct Hit {
+    pub row: usize,
+    pub col: usize,
+    pub wrapped: bool,
+}
+
 impl Table {
     pub fn parse(text: &str) -> Self {
         let lines: Vec<String> = text.lines().map(String::from).collect();
@@ -89,6 +97,45 @@ impl Table {
             return Some(line.trim().to_string());
         }
         Some(cell_text(line, self.columns.get(col)?))
+    }
+
+    /// Find the next cell containing `query`, starting after (`row`, `col`)
+    /// and wrapping around — like vim's `/` and `?`.
+    ///
+    /// Smart-case: an all-lowercase query ignores case, any uppercase letter
+    /// makes it case-sensitive.
+    pub fn find(&self, row: usize, col: usize, query: &str, forward: bool) -> Option<Hit> {
+        // Plain text counts as one column, so the same loop works for both.
+        let ncols = self.columns.len().max(1);
+        let total = self.data_rows() * ncols;
+        if total == 0 || query.is_empty() {
+            return None;
+        }
+        let ignore_case = !query.chars().any(char::is_uppercase);
+        let needle = if ignore_case { query.to_lowercase() } else { query.to_string() };
+
+        // Number the cells 0..total in reading order and walk around that
+        // circle; `step == total` comes back to the start cell itself.
+        let start = (row * ncols + col).min(total - 1);
+        for step in 1..=total {
+            let idx = if forward {
+                (start + step) % total
+            } else {
+                (start + total - step) % total
+            };
+            let (r, c) = (idx / ncols, idx % ncols);
+            let Some(cell) = self.cell(r, c) else { continue };
+            let found = if ignore_case {
+                cell.to_lowercase().contains(&needle)
+            } else {
+                cell.contains(&needle)
+            };
+            if found {
+                let wrapped = if forward { idx <= start } else { idx >= start };
+                return Some(Hit { row: r, col: c, wrapped });
+            }
+        }
+        None
     }
 
     /// A whole data row as tab-separated cell values (pastes into
@@ -250,6 +297,26 @@ mod tests {
         let t = Table::parse(UNICODE);
         assert_eq!(t.header_rows, 2);
         assert_eq!(t.cell(0, 1).as_deref(), Some("żółw"));
+    }
+
+    #[test]
+    fn finds_cells() {
+        let t = Table::parse(PGCLI);
+        let hit = |row, col, wrapped| Some(Hit { row, col, wrapped });
+        // forward from the first cell
+        assert_eq!(t.find(0, 0, "bob", true), hit(1, 1, false));
+        // smart-case: uppercase makes it case-sensitive
+        assert_eq!(t.find(0, 0, "Bob", true), None);
+        assert_eq!(t.find(0, 0, "BO", true), None);
+        // wraps around the end...
+        assert_eq!(t.find(1, 1, "alice", true), hit(0, 1, true));
+        // ...and the start when searching backwards
+        assert_eq!(t.find(0, 0, "bob", false), hit(1, 1, true));
+        // the only match is the current cell: found again after a full wrap
+        assert_eq!(t.find(0, 1, "alice", true), hit(0, 1, true));
+        // plain text searches lines
+        let p = Table::parse("one\ntwo\nthree");
+        assert_eq!(p.find(0, 0, "t", true), hit(1, 0, false));
     }
 
     #[test]

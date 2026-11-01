@@ -6,7 +6,7 @@ use anyhow::Result;
 use ratatui::{
     DefaultTerminal, Frame,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    layout::{Constraint, Layout, Margin},
+    layout::{Constraint, Layout, Margin, Position},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
@@ -18,6 +18,7 @@ use crate::cell::{self, Formatted};
 use crate::clipboard;
 use crate::editor::{self, EditRequest};
 use crate::table::{Table, slice_cols};
+use unicode_width::UnicodeWidthStr;
 
 /// How many terminal columns H / L scroll the view.
 const VIEW_STEP: usize = 4;
@@ -49,6 +50,16 @@ struct Popup {
 enum Mode {
     Table,
     Detail(Popup),
+    /// Typing a search query in the status bar (`/` or `?`).
+    Search(Search),
+}
+
+/// A search: what to look for and in which direction.
+/// Also remembered after Enter so `n` / `N` can repeat it.
+#[derive(Clone)]
+struct Search {
+    query: String,
+    forward: bool,
 }
 
 pub struct App {
@@ -70,6 +81,7 @@ pub struct App {
     /// Editor to open after this key press (needs the terminal, which only
     /// the main loop has).
     pending_edit: Option<EditRequest>,
+    last_search: Option<Search>,
     quit: bool,
 }
 
@@ -86,6 +98,7 @@ impl App {
             view: View::default(),
             message: None,
             pending_edit: None,
+            last_search: None,
             quit: false,
         }
     }
@@ -163,8 +176,14 @@ impl App {
             status,
         );
 
-        if let Mode::Detail(popup) = &mut self.mode {
-            draw_popup(frame, popup);
+        match &mut self.mode {
+            Mode::Detail(popup) => draw_popup(frame, popup),
+            // Show the real terminal cursor after the typed query.
+            Mode::Search(search) => frame.set_cursor_position(Position::new(
+                status.x + 1 + search.query.width() as u16,
+                status.y,
+            )),
+            Mode::Table => {}
         }
 
         // Messages are shown once, then cleared.
@@ -184,10 +203,14 @@ impl App {
     }
 
     fn status_text(&self) -> String {
+        if let Mode::Search(search) = &self.mode {
+            let prompt = if search.forward { '/' } else { '?' };
+            return format!("{prompt}{}", search.query);
+        }
         if let Some(msg) = &self.message {
             return format!(" {msg}");
         }
-        let help = "hjkl:move  HL:scroll  x:cell  e/E:vim  y/Y:copy  q:quit";
+        let help = "hjkl:move  HL:scroll  x:cell  e/E:vim  y/Y:copy  /:search  q:quit";
         let rows = self.table.data_rows();
         if self.cell_mode() {
             let name = self.table.column_names.get(self.col).map_or("", String::as_str);
@@ -271,11 +294,77 @@ impl App {
             self.quit = true;
             return;
         }
-        // `matches!` checks the variant without borrowing the popup inside.
-        if matches!(self.mode, Mode::Detail(_)) {
-            self.popup_key(key);
-        } else {
-            self.table_key(key);
+        // `_` patterns only look at the variant and don't borrow what's
+        // inside, so the arms are free to call `&mut self` methods.
+        match self.mode {
+            Mode::Table => self.table_key(key),
+            Mode::Detail(_) => self.popup_key(key),
+            Mode::Search(_) => self.search_key(key),
+        }
+    }
+
+    /// Keys while typing a search query.
+    fn search_key(&mut self, key: KeyEvent) {
+        let Mode::Search(search) = &mut self.mode else { return };
+        match key.code {
+            KeyCode::Esc => self.mode = Mode::Table,
+            // Backspace on an empty query cancels, like vim.
+            KeyCode::Backspace => {
+                if search.query.pop().is_none() {
+                    self.mode = Mode::Table;
+                }
+            }
+            KeyCode::Enter => {
+                // `mem::take` moves the query out, leaving an empty String.
+                let query = std::mem::take(&mut search.query);
+                let forward = search.forward;
+                self.mode = Mode::Table;
+                if !query.is_empty() {
+                    self.last_search = Some(Search { query, forward });
+                } else if let Some(last) = &mut self.last_search {
+                    // Empty `/` + Enter repeats the last query, in the new direction.
+                    last.forward = forward;
+                }
+                self.search_next(false);
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                search.query.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    /// Jump to the next match of the last search (`reverse` = `N`).
+    fn search_next(&mut self, reverse: bool) {
+        let Some(Search { query, forward }) = self.last_search.clone() else {
+            self.message = Some("no previous search".into());
+            return;
+        };
+        let forward = forward != reverse; // `!=` on bools is XOR
+        match self.table.find(self.row, self.col, &query, forward) {
+            Some(hit) => {
+                self.row = hit.row;
+                self.set_col(hit.col);
+                if hit.wrapped {
+                    self.message = Some(if forward {
+                        "search hit BOTTOM, continuing at TOP".into()
+                    } else {
+                        "search hit TOP, continuing at BOTTOM".into()
+                    });
+                }
+            }
+            None => self.message = Some(format!("Pattern not found: {query}")),
+        }
+    }
+
+    /// `*` / `#`: search for the current cell's value.
+    fn search_cell(&mut self, forward: bool) {
+        match self.table.cell(self.row, self.col) {
+            Some(query) if !query.is_empty() => {
+                self.last_search = Some(Search { query, forward });
+                self.search_next(false);
+            }
+            _ => self.message = Some("empty cell".into()),
         }
     }
 
@@ -336,6 +425,16 @@ impl App {
                 }
             }
             KeyCode::Char('x') | KeyCode::Enter => self.open_popup(),
+
+            // Search.
+            KeyCode::Char(c @ ('/' | '?')) => {
+                let search = Search { query: String::new(), forward: c == '/' };
+                self.mode = Mode::Search(search);
+            }
+            KeyCode::Char('n') => self.search_next(false),
+            KeyCode::Char('N') => self.search_next(true),
+            KeyCode::Char('*') => self.search_cell(true),
+            KeyCode::Char('#') => self.search_cell(false),
             KeyCode::Char('e') => {
                 if let Some(value) = self.table.cell(self.row, self.col) {
                     let f = cell::format(&value);
