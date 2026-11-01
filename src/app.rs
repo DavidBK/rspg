@@ -1,6 +1,7 @@
 //! Application state, drawing and key handling.
 
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::{
@@ -33,6 +34,17 @@ struct View {
     frozen: usize,
     /// Width of the horizontally scrolling part.
     scroll_width: usize,
+}
+
+/// How long a copied cell/row stays highlighted (like Neovim's highlight-on-yank).
+const FLASH_TIME: Duration = Duration::from_millis(300);
+
+/// A short highlight of what was just copied.
+struct Flash {
+    row: usize,
+    /// `None` = the whole row (`Y`).
+    col: Option<usize>,
+    until: Instant,
 }
 
 /// The cell detail popup (`x` / Enter).
@@ -82,6 +94,7 @@ pub struct App {
     /// the main loop has).
     pending_edit: Option<EditRequest>,
     last_search: Option<Search>,
+    flash: Option<Flash>,
     quit: bool,
 }
 
@@ -99,6 +112,7 @@ impl App {
             message: None,
             pending_edit: None,
             last_search: None,
+            flash: None,
             quit: false,
         }
     }
@@ -106,6 +120,16 @@ impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.quit {
             terminal.draw(|frame| self.draw(frame))?;
+
+            // While a flash is showing, wait for a key only until it expires;
+            // on timeout, drop the flash and loop around to redraw.
+            if let Some(flash) = &self.flash {
+                let remaining = flash.until.saturating_duration_since(Instant::now());
+                if !event::poll(remaining)? {
+                    self.flash = None;
+                    continue;
+                }
+            }
             self.handle_event(event::read()?);
 
             // `take()` moves the request out and leaves `None` behind.
@@ -161,11 +185,24 @@ impl App {
             .collect();
 
         for (i, line) in rest.iter().enumerate().skip(self.top).take(self.view.page_height) {
-            let (style, cursor) = if i == self.row && self.table.data_rows() > 0 {
-                let cursor = self.table.columns.get(self.col).cloned();
-                (Style::new().bg(Color::Indexed(237)), cursor)
-            } else {
-                (Style::new(), None)
+            let flash = self.flash.as_ref().filter(|f| f.row == i);
+            let flash_style = Style::new().bg(Color::Yellow).fg(Color::Black);
+            let cursor_style = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+            let cell = |col: usize| self.table.columns.get(col).cloned();
+
+            let (style, cursor) = match flash {
+                // `Y`: the whole row lights up.
+                Some(Flash { col: None, .. }) => (flash_style, None),
+                // `y`: just the copied cell.
+                Some(Flash { col: Some(c), .. }) => (
+                    Style::new().bg(Color::Indexed(237)),
+                    cell(*c).map(|r| (r, flash_style)),
+                ),
+                None if i == self.row && self.table.data_rows() > 0 => (
+                    Style::new().bg(Color::Indexed(237)),
+                    cell(self.col).map(|r| (r, cursor_style)),
+                ),
+                None => (Style::new(), None),
             };
             lines.push(self.render_line(line, style, cursor));
         }
@@ -186,13 +223,16 @@ impl App {
             Mode::Table => {}
         }
 
-        // Messages are shown once, then cleared.
-        self.message = None;
     }
 
-    /// Build one screen line: [frozen part][scrolled part], with the cursor
-    /// cell (if any) highlighted.
-    fn render_line(&self, line: &str, style: Style, cursor: Option<Range<usize>>) -> Line<'static> {
+    /// Build one screen line: [frozen part][scrolled part], with one cell
+    /// range (the cursor, or a copy flash) drawn in its own style.
+    fn render_line(
+        &self,
+        line: &str,
+        style: Style,
+        cursor: Option<(Range<usize>, Style)>,
+    ) -> Line<'static> {
         let View { frozen, scroll_width, .. } = self.view;
         let mut spans = Vec::new();
         let frozen_style = style.add_modifier(Modifier::BOLD);
@@ -290,6 +330,9 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        // A message stays until the next key press (redraws, e.g. when a
+        // flash ends, keep it).
+        self.message = None;
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.quit = true;
             return;
@@ -414,14 +457,20 @@ impl App {
             KeyCode::Char('y') => {
                 if let Some(value) = self.table.cell(self.row, self.col) {
                     let label = format!("cell: {value}");
-                    self.copy(&value, &label);
+                    // Plain text has no cells: flash the whole line.
+                    let col = self.cell_mode().then_some(self.col);
+                    if self.copy(&value, &label) {
+                        self.start_flash(col);
+                    }
                 }
             }
             KeyCode::Char('Y') => {
                 if let Some(row) = self.table.row(self.row) {
                     let cells = self.table.columns.len().max(1);
                     let label = format!("row {} ({cells} cells)", self.row + 1);
-                    self.copy(&row, &label);
+                    if self.copy(&row, &label) {
+                        self.start_flash(None);
+                    }
                 }
             }
             KeyCode::Char('x') | KeyCode::Enter => self.open_popup(),
@@ -528,11 +577,18 @@ impl App {
     }
 
     /// Copy `text`; `label` describes it in the status bar.
-    fn copy(&mut self, text: &str, label: &str) {
-        self.message = Some(match clipboard::copy(text) {
+    /// Returns whether it worked.
+    fn copy(&mut self, text: &str, label: &str) -> bool {
+        let result = clipboard::copy(text);
+        self.message = Some(match &result {
             Ok(()) => format!("copied {label}"),
             Err(e) => format!("copy failed: {e}"),
         });
+        result.is_ok()
+    }
+
+    fn start_flash(&mut self, col: Option<usize>) {
+        self.flash = Some(Flash { row: self.row, col, until: Instant::now() + FLASH_TIME });
     }
 
     fn edit(&mut self, text: String, is_json: bool, line: Option<usize>) {
@@ -578,23 +634,24 @@ fn draw_popup(frame: &mut Frame, popup: &mut Popup) {
     }
 }
 
-/// Append the screen columns `range` of `line` as spans, highlighting the
-/// part that overlaps `cursor`.
+/// Append the screen columns `range` of `line` as spans, drawing the part
+/// that overlaps `cursor` in the cursor's style.
 fn push_segment(
     spans: &mut Vec<Span<'static>>,
     line: &str,
     range: Range<usize>,
     style: Style,
-    cursor: Option<Range<usize>>,
+    cursor: Option<(Range<usize>, Style)>,
 ) {
     if range.is_empty() {
         return;
     }
-    let cursor_style = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
     // Intersect the cursor cell with this segment.
-    let hl = cursor
-        .map(|c| c.start.max(range.start)..c.end.min(range.end))
-        .filter(|c| !c.is_empty());
+    let (hl, cursor_style) = match cursor {
+        Some((c, s)) => (Some(c.start.max(range.start)..c.end.min(range.end)), s),
+        None => (None, style),
+    };
+    let hl = hl.filter(|c| !c.is_empty());
 
     match hl {
         None => spans.push(Span::styled(slice_cols(line, range.start, range.len()), style)),
