@@ -18,7 +18,7 @@ use ratatui::{
 use crate::cell::{self, Formatted};
 use crate::clipboard;
 use crate::editor::{self, EditRequest};
-use crate::table::{Matcher, Table, is_border_line, slice_cols};
+use crate::table::{Matcher, Table, slice_cols};
 use unicode_width::UnicodeWidthStr;
 
 /// How many terminal columns H / L scroll the view.
@@ -186,11 +186,7 @@ impl App {
         let mut lines: Vec<Line> = header
             .iter()
             .take(height)
-            .map(|l| {
-                // Column names in green; border lines (`+----+`) stay plain.
-                let style = if is_border_line(l) { Style::new() } else { header_style };
-                self.render_line(l, style, &[])
-            })
+            .map(|l| self.render_line(l, header_style, &[]))
             .collect();
 
         let match_style = Style::new().bg(Color::LightYellow).fg(Color::Black);
