@@ -8,7 +8,9 @@
 // `mod app;` tells the compiler "there is a module in src/app.rs".
 // Modules are Rust's unit of code organisation (like a file/namespace).
 mod app;
+mod cell;
 mod clipboard;
+mod editor;
 mod table;
 
 use std::fs;
