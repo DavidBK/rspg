@@ -4,11 +4,11 @@ A small terminal pager for [pgcli](https://www.pgcli.com/) and psql, written in 
 Inspired by [pspg](https://github.com/okbob/pspg).
 
 - Frozen header rows and first column
-- Cell cursor with vim-style navigation
-- Copy a cell or a whole row to the clipboard
-- Search with match highlighting
-- Pretty-printed JSON cells
-- Open a cell or the whole table in `$EDITOR`
+- Cell cursor with vim-style navigation (`j/k/h/l`) or arrow keys
+- Copy a cell or row to the clipboard (`y/Y`)
+- Search with match highlighting (`/ or ?`, `n/N` to navigate)
+- Pretty-printed JSON or long cells (`f`)
+- Open a cell or the whole table in `$EDITOR` (`e`)
 
 ## Install
 
@@ -16,19 +16,17 @@ Inspired by [pspg](https://github.com/okbob/pspg).
 cargo install --path .
 ```
 
-This puts `rspg` in `~/.cargo/bin`.
+This puts `rspg` in `~/.cargo/bin`. Make sure that directory is on your `PATH`.
 
 ## Use
 
-With pgcli, add this to `~/.config/pgcli/config`:
+With pgcli, add this to pgcli config (`$xdg_home/pgcli/config`)
 
 ```ini
 pager = rspg
-# don't truncate long values (needed for JSON cells)
+# don't truncate long values (for long JSON cells)
 max_field_width =
 ```
-
-Run `\pset pager always` in pgcli to page every result, not only long ones.
 
 Other ways to run it:
 
@@ -38,34 +36,14 @@ psql -c 'select ...' | rspg     # pipe
 rspg output.txt                 # file
 ```
 
-## Keys
+## Keybindings
 
-| Key | Action |
-|---|---|
-| `h j k l`, arrows | move one cell |
-| `w` / `b` | next / previous column |
-| `Ctrl-d` / `Ctrl-u` | half page down / up |
-| `Space`, `PgDn` / `PgUp` | page down / up |
-| `g` / `G` | first / last row |
-| `0` / `$` | first / last column |
-| `H` / `L`, `Shift-←/→` | scroll view left / right |
-| `Ctrl-e` / `Ctrl-y` | scroll view down / up |
-| `y` / `Y` | copy cell / row (row is tab-separated) |
-| `f`, `Enter` | cell detail popup (JSON pretty-printed) |
-| `e` / `E` | open cell / table in `$VISUAL`, `$EDITOR` or vim |
-| `/` / `?` | search forward / backward |
-| `n` / `N` | next / previous match |
-| `*` / `#` | search for the current cell's value |
-| `Esc` | clear search highlight, then quit |
-| `q` | quit |
+vim-style navigation. In the future, this will be configurable.
+All the keys are shown in the button help bar
 
-Search is smart-case: an all-lowercase query ignores case. Copying uses
-`pbcopy`, `wl-copy`, `xclip` or `xsel`. Changes made in the editor are
-discarded.
+## License
 
-## Development
-
-```sh
-cargo run -- file.txt
-cargo test
-```
+rspg is free software: you can redistribute it and/or modify it under the
+terms of the [GNU General Public License](LICENSE) as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
