@@ -12,11 +12,24 @@ Inspired by [pspg](https://github.com/okbob/pspg).
 
 ## Install
 
+Needs a Rust toolchain ([rustup](https://rustup.rs/)). Install straight from GitHub:
+
 ```sh
+cargo install --git https://github.com/DavidBK/rspg
+```
+
+Or from a local clone:
+
+```sh
+git clone https://github.com/DavidBK/rspg
+cd rspg
 cargo install --path .
 ```
 
-This puts `rspg` in `~/.cargo/bin`. Make sure that directory is on your `PATH`.
+Either way, `rspg` ends up in `~/.cargo/bin`. Make sure that directory is on your `PATH`.
+
+To update, run the same `cargo install` command again (add `--force` if it says
+the version is already installed). To remove: `cargo uninstall rspg`.
 
 ## Use
 
