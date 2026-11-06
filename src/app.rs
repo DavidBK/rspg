@@ -602,7 +602,7 @@ impl App {
     fn open_popup(&mut self) {
         let Some(value) = self.table.cell(self.row, self.col) else { return };
         let column = self.table.column_names.get(self.col).map_or("line", String::as_str);
-        let mut title = format!("{column} · row {}", self.row + 1);
+        let mut title = column.to_string();
         // Also name the row by its first column (usually an id), unless
         // that's the cell we're already showing.
         if self.col != 0
