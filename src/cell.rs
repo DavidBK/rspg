@@ -91,8 +91,7 @@ fn read_python_string(
             c if c == quote => return Some(text),
             '\\' => {
                 let e = chars.next()?;
-                // Hex escapes: read `len` hex digits into a char.
-                let mut hex = |len: usize| -> Option<char> {
+                let mut read_hex_char = |len: usize| -> Option<char> {
                     let digits: String = chars.by_ref().take(len).collect();
                     char::from_u32(u32::from_str_radix(&digits, 16).ok()?)
                 };
@@ -100,9 +99,9 @@ fn read_python_string(
                     'n' => text.push('\n'),
                     't' => text.push('\t'),
                     'r' => text.push('\r'),
-                    'x' => text.push(hex(2)?),
-                    'u' => text.push(hex(4)?),
-                    'U' => text.push(hex(8)?),
+                    'x' => text.push(read_hex_char(2)?),
+                    'u' => text.push(read_hex_char(4)?),
+                    'U' => text.push(read_hex_char(8)?),
                     '\\' | '\'' | '"' => text.push(e),
                     other => {
                         text.push('\\');
