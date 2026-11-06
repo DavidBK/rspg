@@ -13,6 +13,7 @@ mod clipboard;
 mod editor;
 mod keys;
 mod table;
+mod ui;
 
 use std::fs;
 use std::io::{self, IsTerminal, Read};
@@ -40,10 +41,12 @@ fn main() -> Result<()> {
 
     // `match` on an `Option` forces us to handle both cases — no nulls in Rust.
     let text = match &args.file {
-        Some(path) => fs::read_to_string(path)
+        Some(path) => fs::read(path)
             .with_context(|| format!("cannot read {}", path.display()))?,
         None => read_stdin()?,
     };
+    // Non-UTF-8 bytes (e.g. a LATIN1 database) become `�` instead of an error.
+    let text = String::from_utf8_lossy(&text);
 
     // Nothing to page (e.g. the query failed): exit quietly, like `less -F`.
     if text.trim().is_empty() {
@@ -66,13 +69,13 @@ fn main() -> Result<()> {
     result
 }
 
-fn read_stdin() -> Result<String> {
+fn read_stdin() -> Result<Vec<u8>> {
     let mut stdin = io::stdin();
     if stdin.is_terminal() {
         // Nobody piped anything in; reading would just wait forever.
         bail!("no input: pipe data into rspg or pass a file name");
     }
-    let mut buf = String::new();
-    stdin.read_to_string(&mut buf).context("cannot read stdin")?;
+    let mut buf = Vec::new();
+    stdin.read_to_end(&mut buf).context("cannot read stdin")?;
     Ok(buf)
 }
