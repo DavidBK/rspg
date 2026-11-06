@@ -20,9 +20,10 @@ This puts `rspg` in `~/.cargo/bin`. Make sure that directory is on your `PATH`.
 
 ## Use
 
-With pgcli, add this to pgcli config (`$xdg_home/pgcli/config`)
+With pgcli, add this to pgcli config `main` section (`$XDG_CONFIG_HOME/pgcli/config`):
 
 ```ini
+[main]
 pager = rspg
 # don't truncate long values (for long JSON cells)
 max_field_width =
@@ -43,7 +44,4 @@ All the keys are shown in the button help bar
 
 ## License
 
-rspg is free software: you can redistribute it and/or modify it under the
-terms of the [GNU General Public License](LICENSE) as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
-later version.
+[GPL-3.0-or-later](LICENSE)
