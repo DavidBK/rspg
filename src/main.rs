@@ -11,6 +11,7 @@ mod app;
 mod cell;
 mod clipboard;
 mod editor;
+mod keys;
 mod table;
 
 use std::fs;

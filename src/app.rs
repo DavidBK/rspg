@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use ratatui::{
     DefaultTerminal, Frame,
-    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    crossterm::event::{self, Event, KeyEvent, KeyEventKind},
     layout::{Constraint, Layout, Margin, Position},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -18,6 +18,7 @@ use ratatui::{
 use crate::cell::{self, Formatted};
 use crate::clipboard;
 use crate::editor::{self, EditRequest};
+use crate::keys::{self, PopupAction, SearchAction, TableAction};
 use crate::table::{Matcher, Table, is_border_line, slice_cols};
 use unicode_width::UnicodeWidthStr;
 
@@ -47,7 +48,7 @@ struct Flash {
     until: Instant,
 }
 
-/// The cell detail popup (`x` / Enter).
+/// The cell detail popup (`f` / Enter).
 struct Popup {
     title: String,
     content: Formatted,
@@ -286,7 +287,7 @@ impl App {
         if let Some(msg) = &self.message {
             return format!(" {msg}");
         }
-        let help = "hjkl:move  HL:scroll  x:cell  e/E:vim  y/Y:copy  /:search  q:quit";
+        let help = keys::TABLE_HELP;
         let rows = self.table.data_rows();
         if self.cell_mode() {
             let name = self.table.column_names.get(self.col).map_or("", String::as_str);
@@ -369,7 +370,7 @@ impl App {
         // A message stays until the next key press (redraws, e.g. when a
         // flash ends, keep it).
         self.message = None;
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if keys::is_force_quit(key) {
             self.quit = true;
             return;
         }
@@ -385,15 +386,16 @@ impl App {
     /// Keys while typing a search query.
     fn search_key(&mut self, key: KeyEvent) {
         let Mode::Search(search) = &mut self.mode else { return };
-        match key.code {
-            KeyCode::Esc => self.mode = Mode::Table,
+        let Some(action) = keys::search_action(key) else { return };
+        match action {
+            SearchAction::Cancel => self.mode = Mode::Table,
             // Backspace on an empty query cancels, like vim.
-            KeyCode::Backspace => {
+            SearchAction::Backspace => {
                 if search.query.pop().is_none() {
                     self.mode = Mode::Table;
                 }
             }
-            KeyCode::Enter => {
+            SearchAction::Submit => {
                 // `mem::take` moves the query out, leaving an empty String.
                 let query = std::mem::take(&mut search.query);
                 let forward = search.forward;
@@ -406,10 +408,7 @@ impl App {
                 }
                 self.search_next(false);
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                search.query.push(c);
-            }
-            _ => {}
+            SearchAction::Insert(c) => search.query.push(c),
         }
     }
 
@@ -451,51 +450,45 @@ impl App {
     fn table_key(&mut self, key: KeyEvent) {
         let page = self.view.page_height.max(1) as isize;
         let half = (page / 2).max(1);
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let step = VIEW_STEP as isize;
+        let Some(action) = keys::table_action(key) else { return };
 
-        // Arms are tried top to bottom, so the Ctrl/Shift variants must come
-        // before the plain keys they share a KeyCode with.
-        match key.code {
-            KeyCode::Char('q') => self.quit = true,
+        match action {
+            TableAction::Quit => self.quit = true,
             // Esc first clears search highlights, then quits.
-            KeyCode::Esc if self.highlight => self.highlight = false,
-            KeyCode::Esc => self.quit = true,
+            TableAction::Cancel if self.highlight => self.highlight = false,
+            TableAction::Cancel => self.quit = true,
 
             // View only.
-            KeyCode::Char('e') if ctrl => self.scroll_view(1, 0),
-            KeyCode::Char('y') if ctrl => self.scroll_view(-1, 0),
-            KeyCode::Left if shift => self.scroll_view(0, -step),
-            KeyCode::Right if shift => self.scroll_view(0, step),
-            KeyCode::Char('H') => self.scroll_view(0, -step),
-            KeyCode::Char('L') => self.scroll_view(0, step),
+            TableAction::ScrollDown => self.scroll_view(1, 0),
+            TableAction::ScrollUp => self.scroll_view(-1, 0),
+            TableAction::ScrollLeft => self.scroll_view(0, -step),
+            TableAction::ScrollRight => self.scroll_view(0, step),
 
             // Cursor.
-            KeyCode::Char('d') if ctrl => self.move_page(half),
-            KeyCode::Char('u') if ctrl => self.move_page(-half),
-            KeyCode::Down | KeyCode::Char('j') => self.move_row(1),
-            KeyCode::Up | KeyCode::Char('k') => self.move_row(-1),
-            // w / b: next / previous cell, like vim's word motions.
-            KeyCode::Right | KeyCode::Char('l' | 'w') => self.move_col(1),
-            KeyCode::Left | KeyCode::Char('h' | 'b') => self.move_col(-1),
-            KeyCode::PageDown | KeyCode::Char(' ') => self.move_page(page),
-            KeyCode::PageUp => self.move_page(-page),
-            KeyCode::Home | KeyCode::Char('g') => {
+            TableAction::HalfPageDown => self.move_page(half),
+            TableAction::HalfPageUp => self.move_page(-half),
+            TableAction::Down => self.move_row(1),
+            TableAction::Up => self.move_row(-1),
+            TableAction::Right => self.move_col(1),
+            TableAction::Left => self.move_col(-1),
+            TableAction::PageDown => self.move_page(page),
+            TableAction::PageUp => self.move_page(-page),
+            TableAction::Top => {
                 self.row = 0;
                 self.top = 0;
                 self.follow_cursor = true;
             }
-            KeyCode::End | KeyCode::Char('G') => {
+            TableAction::Bottom => {
                 self.row = self.table.data_rows().saturating_sub(1);
                 self.top = self.max_top(); // also reveals the footer
                 self.follow_cursor = true;
             }
-            KeyCode::Char('0' | '^') => self.set_col(0),
-            KeyCode::Char('$') => self.set_col(self.table.columns.len().saturating_sub(1)),
+            TableAction::FirstCol => self.set_col(0),
+            TableAction::LastCol => self.set_col(self.table.columns.len().saturating_sub(1)),
 
             // Actions on the current cell.
-            KeyCode::Char('y') => {
+            TableAction::CopyCell => {
                 if let Some(value) = self.table.cell(self.row, self.col) {
                     let label = format!("cell: {value}");
                     // Plain text has no cells: flash the whole line.
@@ -505,7 +498,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('Y') => {
+            TableAction::CopyRow => {
                 if let Some(row) = self.table.row(self.row) {
                     let cells = self.table.columns.len().max(1);
                     let label = format!("row {} ({cells} cells)", self.row + 1);
@@ -514,30 +507,31 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('x') | KeyCode::Enter => self.open_popup(),
+            TableAction::OpenPopup => self.open_popup(),
 
             // Search.
-            KeyCode::Char(c @ ('/' | '?')) => {
-                let search = Search { query: String::new(), forward: c == '/' };
-                self.mode = Mode::Search(search);
-            }
-            KeyCode::Char('n') => self.search_next(false),
-            KeyCode::Char('N') => self.search_next(true),
-            KeyCode::Char('*') => self.search_cell(true),
-            KeyCode::Char('#') => self.search_cell(false),
-            KeyCode::Char('e') => {
+            TableAction::SearchForward => self.start_search(true),
+            TableAction::SearchBackward => self.start_search(false),
+            TableAction::NextMatch => self.search_next(false),
+            TableAction::PrevMatch => self.search_next(true),
+            TableAction::SearchCellForward => self.search_cell(true),
+            TableAction::SearchCellBackward => self.search_cell(false),
+            TableAction::EditCell => {
                 if let Some(value) = self.table.cell(self.row, self.col) {
                     let f = cell::format(&value);
                     self.edit(f.text, f.is_json, None);
                 }
             }
-            KeyCode::Char('E') => {
+            TableAction::EditAll => {
                 let text = self.table.lines.join("\n");
                 let line = self.table.header_rows + self.row + 1;
                 self.edit(text, false, Some(line));
             }
-            _ => {}
         }
+    }
+
+    fn start_search(&mut self, forward: bool) {
+        self.mode = Mode::Search(Search { query: String::new(), forward });
     }
 
     fn popup_key(&mut self, key: KeyEvent) {
@@ -545,33 +539,33 @@ impl App {
         let Mode::Detail(popup) = &mut self.mode else { return };
         let page = popup.page_height.max(1) as isize;
         let half = (page / 2).max(1);
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let max_scroll = popup.line_count.saturating_sub(popup.page_height);
         let mut scroll_by = |n: isize| {
             popup.scroll = popup.scroll.checked_add_signed(n).unwrap_or(0).min(max_scroll);
         };
 
-        match key.code {
-            KeyCode::Char('q' | 'x') | KeyCode::Esc | KeyCode::Enter => self.mode = Mode::Table,
-            KeyCode::Char('d') if ctrl => scroll_by(half),
-            KeyCode::Char('u') if ctrl => scroll_by(-half),
-            KeyCode::Down | KeyCode::Char('j') => scroll_by(1),
-            KeyCode::Up | KeyCode::Char('k') => scroll_by(-1),
-            KeyCode::PageDown | KeyCode::Char(' ') => scroll_by(page),
-            KeyCode::PageUp => scroll_by(-page),
-            KeyCode::Home | KeyCode::Char('g') => popup.scroll = 0,
-            KeyCode::End | KeyCode::Char('G') => popup.scroll = max_scroll,
-            KeyCode::Char('y') => {
+        let Some(action) = keys::popup_action(key) else { return };
+
+        match action {
+            PopupAction::Close => self.mode = Mode::Table,
+            PopupAction::HalfPageDown => scroll_by(half),
+            PopupAction::HalfPageUp => scroll_by(-half),
+            PopupAction::Down => scroll_by(1),
+            PopupAction::Up => scroll_by(-1),
+            PopupAction::PageDown => scroll_by(page),
+            PopupAction::PageUp => scroll_by(-page),
+            PopupAction::Top => popup.scroll = 0,
+            PopupAction::Bottom => popup.scroll = max_scroll,
+            PopupAction::Copy => {
                 // Clone first: `self.copy` needs all of `self`, so the
                 // borrow of `popup` (part of `self`) must end before it.
                 let text = popup.content.text.clone();
                 self.copy(&text, "formatted cell");
             }
-            KeyCode::Char('e') => {
+            PopupAction::Edit => {
                 let (text, is_json) = (popup.content.text.clone(), popup.content.is_json);
                 self.edit(text, is_json, None);
             }
-            _ => {}
         }
     }
 
@@ -646,8 +640,10 @@ fn draw_popup(frame: &mut Frame, popup: &mut Popup) {
         .centered(Constraint::Percentage(80), Constraint::Percentage(80));
 
     let mut block = Block::bordered()
+        // Same green as the table header (xterm-256 colour 47).
+        .border_style(Style::new().fg(Color::Indexed(47)))
         .title(format!(" {} ", popup.title))
-        .title_bottom(" j/k:scroll  y:copy  e:vim  q:close ");
+        .title_bottom(keys::POPUP_HELP);
     if let Some(note) = &popup.content.note {
         block = block.title(Line::from(format!(" {note} ")).right_aligned().style(Style::new().fg(Color::Red)));
     }

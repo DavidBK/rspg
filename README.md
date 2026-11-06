@@ -51,7 +51,7 @@ rspg output.txt                 # file
 | `H` / `L`, `Shift-←/→` | scroll view left / right |
 | `Ctrl-e` / `Ctrl-y` | scroll view down / up |
 | `y` / `Y` | copy cell / row (row is tab-separated) |
-| `x`, `Enter` | cell detail popup (JSON pretty-printed) |
+| `f`, `Enter` | cell detail popup (JSON pretty-printed) |
 | `e` / `E` | open cell / table in `$VISUAL`, `$EDITOR` or vim |
 | `/` / `?` | search forward / backward |
 | `n` / `N` | next / previous match |
