@@ -5,7 +5,8 @@
 //!   rspg some_output.txt
 //!   (in pgcli)  \pager rspg   or   PAGER=rspg pgcli
 
-// `mod app;` tells the compiler "there is a module in src/app.rs".
+// `mod app;` tells the compiler "there is a module in src/app.rs"
+// (or src/app/mod.rs).
 // Modules are Rust's unit of code organisation (like a file/namespace).
 mod app;
 mod cell;

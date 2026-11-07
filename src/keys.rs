@@ -1,7 +1,7 @@
 //! All key bindings in one place.
 //!
 //! Each screen mode has an action enum. The functions here map a key press
-//! to an action, and `app.rs` decides what each action does. To change a
+//! to an action, and `app` decides what each action does. To change a
 //! binding, edit the `match` below. If you change it, update the help
 //! strings at the bottom too.
 
