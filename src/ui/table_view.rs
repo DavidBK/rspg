@@ -21,7 +21,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let table = &app.table;
     let view = &app.viewport;
 
-    // `split_at` gives two borrowed slices of the same Vec — no copying.
     let (header, body) = table.lines.split_at(table.header_rows);
 
     let mut lines: Vec<Line> = header
@@ -96,7 +95,6 @@ fn push_segment(
     if range.is_empty() {
         return;
     }
-    // `vec![x; n]` = n copies of x (Style is Copy, so that's cheap).
     let mut styles = vec![style; range.len()];
     for (r, s) in highlights {
         // Clip the highlight to this segment (empty range = no-op loop).

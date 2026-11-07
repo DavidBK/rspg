@@ -48,7 +48,6 @@ impl App {
             }
             SearchAction::Insert(c) => prompt.query.push(c),
             SearchAction::Submit => {
-                // `mem::take` moves the query out, leaving an empty String.
                 let query = std::mem::take(&mut prompt.query);
                 let forward = prompt.forward;
                 self.mode = Mode::Table;

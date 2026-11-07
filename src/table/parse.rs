@@ -15,7 +15,7 @@ impl Table {
         let lines: Vec<String> = text.lines().map(String::from).collect();
         let max_width = lines.iter().map(|l| l.width()).max().unwrap_or(0);
 
-        // `let ... else`: plain text (no header found) gets a trivial layout.
+        // Plain text (no header found) gets a trivial layout.
         let Some(sep) = find_header_separator(&lines) else {
             return Self {
                 data_end: lines.len(),

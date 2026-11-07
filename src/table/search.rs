@@ -34,8 +34,8 @@ impl Matcher {
         Some(Self { needle, ignore_case })
     }
 
-    /// `Cow` = "clone on write": borrow `text` as-is when case matters,
-    /// only allocate a lowercased copy when it doesn't.
+    /// Borrows `text` as-is when case matters, so only case-insensitive
+    /// searches allocate.
     fn haystack<'a>(&self, text: &'a str) -> Cow<'a, str> {
         if self.ignore_case {
             Cow::Owned(text.to_lowercase())
@@ -69,7 +69,6 @@ impl Table {
         // Plain text counts as one column, so the same loop works for both.
         let ncols = self.columns.len().max(1);
         let total = self.data_rows() * ncols;
-        // `?` on an Option: return None early if the query is empty.
         let matcher = Matcher::new(query)?;
         if total == 0 {
             return None;

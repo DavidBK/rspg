@@ -90,7 +90,6 @@ impl App {
     }
 
     fn move_row(&mut self, delta: isize) {
-        // `checked_add_signed` returns None on underflow; clamp to 0 instead.
         self.set_row(self.cursor.row.checked_add_signed(delta).unwrap_or(0));
     }
 
